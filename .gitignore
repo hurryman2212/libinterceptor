@@ -1,0 +1,17 @@
+*
+!.gitignore
+!.gitmodules
+
+!LICENSE
+!*.md
+
+# CMake
+!CMakeLists.txt
+
+!src/
+!src/**
+!include/
+!include/**
+
+!module
+!libsyscall_intercept
