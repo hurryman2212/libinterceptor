@@ -19,6 +19,26 @@ static bitset64_t _orig_signal_resethand[BITSET64_ARR_LEN(NSIG)] = {0};
 
 /* Wrapper functions */
 
+long raw_syscall(long syscall_number, ...) {
+  long _ret, arg0, arg1, arg2, arg3, arg4, arg5;
+
+  va_list ap;
+  va_start(ap, syscall_number);
+  arg0 = va_arg(ap, long);
+  arg1 = va_arg(ap, long);
+  arg2 = va_arg(ap, long);
+  arg3 = va_arg(ap, long);
+  arg4 = va_arg(ap, long);
+  arg5 = va_arg(ap, long);
+  va_end(ap);
+
+  return (errno = syscall_error_code(
+              _ret = syscall_no_intercept(syscall_number, arg0, arg1, arg2,
+                                          arg3, arg4, arg5)))
+             ? -1
+             : _ret;
+}
+
 static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
                                          void *context);
 static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
@@ -30,8 +50,7 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
   /**
    * Intercept syscall instruction and save return value to `*result`.
    *
-   * Return 0 to omit real syscall instruction to be executed (upon error, set
-   * `*result` to negative `errno` value).
+   * Return 0 to omit real syscall instruction to be executed.
    */
 
   int forward = 1;
@@ -82,9 +101,15 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
     /* Forward to user function first (if available). */
 
-    if (libintercept_syscall_hook)
+    if (libintercept_syscall_hook) {
       forward = libintercept_syscall_hook(syscall_number, arg0, arg1, arg2,
                                           arg3, arg4, arg5, result);
+
+      /* Save `errno` to `*result` upon error. */
+
+      if (!forward && (*result == -1))
+        *result = -errno;
+    }
 
     /* Enable syscall interception again. */
 
