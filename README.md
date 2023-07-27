@@ -4,7 +4,7 @@ You need the special version of [libsyscall_intercept](https://github.com/hurrym
 
 Link to this library with your syscall hook implementation saved to `int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long *ret)`.
 The hook should save the result to `*ret` (upon error, save -1 and set appropriate `errno` value) if handled, otherwise return a non-zero value to forward to the original syscall.
-For handling input parameters: They are for the raw syscall instruction, so do not pass to GLIBC's syscall() wrapper (use raw_syscall() for GLIBC-style wrapper, but it still uses the raw parameter format)!
+For handling the initial input parameters: They are for the raw syscall instruction, so do not pass to GLIBC's syscall() wrapper (use raw_syscall() for GLIBC-style wrapper, but it still uses the raw parameter format)!
 
 The key difference from libsyscall_intercept is that this is the AS-safe implementation where the syscall interception will not happen for system calls within your hook.
 
