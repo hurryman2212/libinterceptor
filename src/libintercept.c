@@ -1,6 +1,5 @@
 #include "libintercept.h"
 
-#include <sys/signal.h>
 #include <sys/syscall.h>
 
 #include <libsyscall_intercept_hook_point.h>
@@ -12,6 +11,7 @@
 int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
                                  long arg2, long arg3, long arg4, long arg5,
                                  long *result) = NULL;
+int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context) = NULL;
 
 static void (*_orig_signal_handle[NSIG])(int sig, siginfo_t *info,
                                          void *context) = {NULL};
@@ -121,44 +121,49 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
 static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
                                          void *context) {
-  int within_hook = intercept_hook_point ? 0 : 1;
+  int within_hook = intercept_hook_point ? 0 : 1, forward = 1;
 
-  if (_orig_signal_handle[sig] == NULL) {
-    /* User did not set signal handler; Raise default signal handler. */
+  intercept_hook_point = NULL;
 
-    intercept_hook_point = NULL;
+  if (libintercept_signal_hook)
+    forward = libintercept_signal_hook(sig, info, context);
 
-    log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
-    sigset_t tmp = {0}, old_sigset;
-    log_assert(!sigaddset(&tmp, sig));
-    /* Unblock this signal first. */
-    log_perror_assert(!sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
-    log_perror_assert(!raise(sig));
-
-    /* Restore previous signal mask and sigaction. */
-
-    struct sigaction sa = {0};
-    sa.sa_flags = SA_SIGINFO;
-    sa.sa_sigaction = _libintercept_signal_wrapper;
-    sa.sa_mask = old_sigset;
-    log_perror_assert(!sigaction(sig, &sa, NULL));
-  } else {
-    /* Call the saved custom signal handler. */
-
-    intercept_hook_point = _libintercept_syscall_hook;
-
-    _orig_signal_handle[sig](sig, info, context);
-
-    /* Check for SA_RESETHAND. */
-
-    if (x86_test_bit(_orig_signal_resethand, sig)) {
-      intercept_hook_point = NULL;
+  if (forward) {
+    if (_orig_signal_handle[sig] == NULL) {
+      /* User did not set signal handler; Raise default signal handler. */
 
       log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
+      sigset_t tmp = {0}, old_sigset;
+      log_perror_assert(!sigaddset(&tmp, sig));
+      /* Unblock this signal first. */
+      log_perror_assert(!sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
+      log_perror_assert(!raise(sig));
 
-      _orig_signal_handle[sig] = NULL;
+      /* Restore previous signal mask and sigaction. */
 
-      x86_unset_bit_atomic(_orig_signal_resethand, sig);
+      struct sigaction sa = {0};
+      sa.sa_flags = SA_SIGINFO;
+      sa.sa_sigaction = _libintercept_signal_wrapper;
+      sa.sa_mask = old_sigset;
+      log_perror_assert(!sigaction(sig, &sa, NULL));
+    } else {
+      /* Call the saved custom signal handler. */
+
+      intercept_hook_point = _libintercept_syscall_hook;
+
+      _orig_signal_handle[sig](sig, info, context);
+
+      /* Check for SA_RESETHAND. */
+
+      if (x86_test_bit(_orig_signal_resethand, sig)) {
+        intercept_hook_point = NULL;
+
+        log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
+
+        _orig_signal_handle[sig] = NULL;
+
+        x86_unset_bit_atomic(_orig_signal_resethand, sig);
+      }
     }
   }
 
@@ -216,7 +221,7 @@ _libintercept_syscall_hook_constructor(void) {
 
   _libintercept_signal_hook_init();
 
-  log_info("Enabling signal & system call interception...");
+  log_info("Enabling syscall & signal interception...");
 
   /* Start system call interception. */
 

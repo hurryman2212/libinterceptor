@@ -1,7 +1,10 @@
 # libintercept
+libintercept - Library for Syscall & Signal Interception
+
 This is a library intended to be used as a 'preloaded' one via `LD_PRELOAD` and currently only supports x86-64 Linux as it depends on libsyscall_intercept.
 You need the special version of [libsyscall_intercept](https://github.com/hurryman2212/syscall_intercept) using the TLS (thread local storage) function pointer variable for hooking.
 
+## Syscall interception
 Link to this library with your syscall hook implementation saved to `int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long *ret)`.
 The hook should save the result to `*ret` (upon error, save -1 and set appropriate `errno` value) if handled, otherwise return a non-zero value to forward to the original syscall.
 For handling the initial input parameters: They are for the raw syscall instruction, so do not pass to GLIBC's syscall() wrapper (use raw_syscall() for GLIBC-style wrapper, but it still uses the raw parameter format)!
@@ -9,6 +12,10 @@ For handling the initial input parameters: They are for the raw syscall instruct
 The key difference from libsyscall_intercept is that this is the AS-safe implementation where the syscall interception will not happen for system calls within your hook.
 
 By default, the backend libsyscall_intercept only intercepts syscalls within glibc objects. Use `INTERCEPT_ALL_OBJS=1` environment variable for intercepting syscalls in all loaded objects.
+
+## Signal interception
+Use `int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context)` for signal hooking point.
+Return non-zero value to call the current origianl signal handler, otherwise 0.
 
 ## Example
 ```c
@@ -20,6 +27,10 @@ By default, the backend libsyscall_intercept only intercepts syscalls within gli
 
 #include <libintercept.h>
 #include <x86linux/helper.h>
+
+int _signal_hook(int sig, siginfo_t *info, void *context) {
+  log_info("SIG%s", sigabbrev_np(sig));
+}
 
 static __attribute__((hot, flatten)) int _syscall_hook(
     __attribute__((unused)) long syscall_number,
@@ -58,5 +69,6 @@ static __attribute__((hot, flatten)) int _syscall_hook(
 
 static __attribute__((constructor)) void _syscall_hook_constructor(void) {
   libintercept_syscall_hook = _syscall_hook;
+  libintercept_signal_hook = _signal_hook;
 }
 ```

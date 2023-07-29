@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/signal.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +23,8 @@ long raw_syscall(long syscall_number, ...);
 extern int (*libintercept_syscall_hook)(long syscall_number, long arg0,
                                         long arg1, long arg2, long arg3,
                                         long arg4, long arg5, long *ret);
+
+extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
 
 #ifdef __cplusplus
 }
