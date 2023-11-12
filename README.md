@@ -4,6 +4,8 @@ libintercept - Library for Syscall & Signal Interception
 This is a library intended to be used as a 'preloaded' one via `LD_PRELOAD` and currently only supports x86-64 Linux as it depends on libsyscall_intercept.
 You need [the special version of libsyscall_intercept](https://github.com/hurryman2212/syscall_intercept) using the TLS (thread local storage) function pointer variable for hooking.
 
+Additionally, you need [libx86linuxextra](https://github.com/hurryman2212/x86linuxextra) as a dependency.
+
 ## Syscall interception
 Link to this library with your syscall hook implementation saved to `int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long *ret)`.
 The hook should save the result to `*ret` (upon error, save -1 and set appropriate `errno` value) if handled, otherwise return a non-zero value to forward to the original syscall.

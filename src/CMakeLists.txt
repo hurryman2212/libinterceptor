@@ -2,7 +2,6 @@
 project(libintercept)
 
 # Find path of external library to link
-find_library(item_libaudit audit)
 find_library(item_libsyscall_intercept syscall_intercept)
 find_library(item_libx86linuxextra x86linuxextra)
 set(libraries ${item_libaudit} ${item_libsyscall_intercept} ${item_libx86linuxextra})

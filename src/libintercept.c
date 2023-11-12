@@ -13,9 +13,7 @@ int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
                                  long *result) = NULL;
 int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context) = NULL;
 
-static void (*_orig_signal_handle[NSIG])(int sig, siginfo_t *info,
-                                         void *context) = {NULL};
-static bitset64_t _orig_signal_resethand[BITSET64_ARR_LEN(NSIG)] = {0};
+static struct sigaction _orig_sigaction[NSIG] = {0};
 
 /* Wrapper functions */
 
@@ -55,43 +53,44 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
   int forward = 1;
 
+  struct sigaction osa;
+
   switch (syscall_number) {
   case SYS_rt_sigaction:
+    /* Disable syscall interception. */
+
+    intercept_hook_point = NULL;
+
     /* Do not allow user to actually change signal handler. */
 
-    /* Check for SA_RESETHAND. */
-
-    if (((const struct sigaction *_Nullable restrict)arg1)->sa_flags &
-        SA_RESETHAND)
-      x86_set_bit_atomic(_orig_signal_resethand, arg0);
+    memcpy(&osa, &_orig_sigaction[arg0], sizeof(struct sigaction));
 
     if (arg1) {
-      /* Check for the ignored signal. */
+      /* Save requested `struct sigaction` first, then alter it. */
 
-      if (((const struct sigaction *_Nullable restrict)arg1)->sa_handler !=
-          SIG_IGN) {
-        /* Save the requested signal hander. */
+      memcpy(&_orig_sigaction[arg0], (const void *)arg1,
+             sizeof(struct sigaction));
 
-        _orig_signal_handle[arg0] =
-            ((const struct sigaction *_Nullable restrict)arg1)->sa_sigaction;
-
-        /* Enforce our signal handler for this signal. */
-
-        ((struct sigaction *_Nullable restrict)arg1)->sa_sigaction =
-            _libintercept_signal_wrapper;
-      }
+      ((struct sigaction *_Nullable restrict)arg1)->sa_sigaction =
+          _libintercept_signal_wrapper;
+      ((struct sigaction *_Nullable restrict)arg1)->sa_flags |= SA_SIGINFO;
     }
 
-    /* Forward to original syscall. */
+    /* (for compatibility) Need to run sigaction() from GLIBC! (?) */
+    if ((*result = sigaction(arg0, (const struct sigaction *)arg1,
+                             (struct sigaction *)arg2)) == -1)
+      *result = -errno;
 
-    break;
+    /* Give the expected sigaction to the user side (if requested). */
 
-  case SYS_execve:
-  case SYS_execveat:
-    /* POSIX compatibility: Reset all saved custom signal handler. */
+    if (arg2)
+      memcpy((void *)arg2, &osa, sizeof(struct sigaction));
 
-    memset(_orig_signal_handle, 0, sizeof(_orig_signal_handle));
+    /* Enable syscall interception again. */
 
+    intercept_hook_point = _libintercept_syscall_hook;
+
+    forward = 0;
     break;
 
   default:
@@ -123,47 +122,48 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
                                          void *context) {
   int within_hook = intercept_hook_point ? 0 : 1, forward = 1;
 
+  /* Disable syscall interception. */
+
   intercept_hook_point = NULL;
 
   if (libintercept_signal_hook)
     forward = libintercept_signal_hook(sig, info, context);
 
   if (forward) {
-    if (_orig_signal_handle[sig] == NULL) {
-      /* User did not set signal handler; Raise default signal handler. */
+    if (!_orig_sigaction[sig].sa_sigaction) {
+      /* User did not set signal handler; Use default signal handler for now. */
 
+      struct sigaction osa;
+      log_perror_assert(!sigaction(sig, NULL, &osa));
       log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
+
+      /* Unblock this signal first, raise it, then restore signal mask. */
+
       sigset_t tmp = {0}, old_sigset;
       log_perror_assert(!sigaddset(&tmp, sig));
-      /* Unblock this signal first. */
       log_perror_assert(!sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
       log_perror_assert(!raise(sig));
+      log_perror_assert(!sigprocmask(SIG_SETMASK, &old_sigset, NULL));
 
       /* Restore previous signal mask and sigaction. */
 
-      struct sigaction sa = {0};
-      sa.sa_flags = SA_SIGINFO;
-      sa.sa_sigaction = _libintercept_signal_wrapper;
-      sa.sa_mask = old_sigset;
-      log_perror_assert(!sigaction(sig, &sa, NULL));
+      osa.sa_sigaction = _libintercept_signal_wrapper;
+      osa.sa_flags |= SA_SIGINFO;
+      log_perror_assert(!sigaction(sig, &osa, NULL));
     } else {
-      /* Call the saved custom signal handler. */
+      /* Enable syscall interception again. */
 
       intercept_hook_point = _libintercept_syscall_hook;
 
-      _orig_signal_handle[sig](sig, info, context);
+      /* Call the saved custom signal handler. */
+
+      _orig_sigaction[sig].sa_sigaction(sig, info, context);
 
       /* Check for SA_RESETHAND. */
 
-      if (x86_test_bit(_orig_signal_resethand, sig)) {
-        intercept_hook_point = NULL;
-
-        log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
-
-        _orig_signal_handle[sig] = NULL;
-
-        x86_unset_bit_atomic(_orig_signal_resethand, sig);
-      }
+      if (*((int *)&_orig_sigaction[sig] + 2) & SA_RESETHAND) // temp.
+        /* Do NOT reset `sa_flags`-related! (standard) */
+        _orig_sigaction[sig].sa_sigaction = NULL;
     }
   }
 
@@ -173,44 +173,55 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
     intercept_hook_point = _libintercept_syscall_hook;
 }
 
-static void _libintercept_signal_hook_init(void) {
-  /* Register our signal wrapper as handler for all signals. */
+/* Constructor */
 
-  sigset_t old_sigset;
-  log_perror_assert(!sigprocmask(SIG_UNBLOCK, NULL, &old_sigset));
-  for (int i = 1; i < NSIG; ++i) {
-    if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
-      struct sigaction sa = {0}, osa;
-      sa.sa_flags = SA_SIGINFO;
-      sa.sa_sigaction = _libintercept_signal_wrapper;
-      sa.sa_mask = old_sigset;
-      log_perror_assert(!sigaction(i, &sa, &osa));
-      if (osa.sa_flags & SA_SIGINFO) {
-        if (osa.sa_sigaction) {
-          _orig_signal_handle[i] = osa.sa_sigaction;
-          log_abort("There was an original `sa_sigaction`!");
-        }
-      } else {
-        if (osa.sa_handler) {
-          _orig_signal_handle[i] =
-              (void (*)(int, siginfo_t *, void *))osa.sa_handler;
-          log_abort("There was an original `sa_handler`!");
-        }
+static void _libintercept_signal_hook_init(void) {
+  /* Allow signal interception only when syscall interception is allowed. */
+
+  if (syscall_hook_in_process_allowed()) {
+
+    /* Register our signal wrapper as handler for all signals. */
+
+    for (int i = 1; i < NSIG; ++i) {
+      if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
+        /* Backup the original sigaction. */
+
+        struct sigaction osa;
+        log_perror_assert(!sigaction(i, NULL, &osa));
+        memcpy(&_orig_sigaction[i], &osa, sizeof(struct sigaction));
+
+        /* Update the sigaction. */
+
+        osa.sa_sigaction = _libintercept_signal_wrapper;
+        osa.sa_flags |= SA_SIGINFO;
+        log_perror_assert(!sigaction(i, &osa, NULL));
+      }
+    }
+
+  } else {
+    /* (for execve*()) Search if the current signal handlers are ours. */
+
+    for (int i = 1; i < NSIG; ++i) {
+      if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
+        struct sigaction osa;
+        log_perror_assert(!sigaction(i, NULL, &osa));
+        if (osa.sa_sigaction == _libintercept_signal_wrapper)
+          /* Restore to the default singal handler. */
+          log_perror_assert(signal(i, SIG_DFL) != SIG_ERR);
       }
     }
   }
 }
-
-/* Constructor */
 
 static void _libintercept_syscall_hook_child(void) {
   /* Reinitialize TLS value. */
 
   intercept_hook_point = _libintercept_syscall_hook;
 }
+
 static __attribute__((constructor)) void
 _libintercept_syscall_hook_constructor(void) {
-  intercept_hook_point = NULL;
+  intercept_hook_point = NULL; // guard?
 
   /* Initialize callbacks for clone()-related functions. */
 
