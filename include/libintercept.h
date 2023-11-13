@@ -24,6 +24,9 @@ extern int (*libintercept_syscall_hook)(long syscall_number, long arg0,
                                         long arg1, long arg2, long arg3,
                                         long arg4, long arg5, long *ret);
 
+extern void (*libintercept_clone_hook_child)(void);
+extern void (*libintercept_clone_hook_parent)(long pid);
+
 extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
 
 #ifdef __cplusplus

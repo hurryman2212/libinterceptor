@@ -11,6 +11,10 @@
 int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
                                  long arg2, long arg3, long arg4, long arg5,
                                  long *result) = NULL;
+
+void (*libintercept_clone_hook_child)(void) = NULL;
+void (*libintercept_clone_hook_parent)(long pid) = NULL;
+
 int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context) = NULL;
 
 static struct sigaction _orig_sigaction[NSIG] = {0};
@@ -199,6 +203,8 @@ static void _libintercept_signal_hook_init(void) {
     }
 
   } else {
+    log_err("Syscall & signal interception is not allowed for this execution!");
+
     /* (for execve*()) Search if the current signal handlers are ours. */
 
     for (int i = 1; i < NSIG; ++i) {
@@ -217,24 +223,29 @@ static void _libintercept_syscall_hook_child(void) {
   /* Reinitialize TLS value. */
 
   intercept_hook_point = _libintercept_syscall_hook;
+
+  if (libintercept_clone_hook_child)
+    libintercept_clone_hook_child();
+}
+static void _libintercept_syscall_hook_parent(long pid) {
+  if (libintercept_clone_hook_parent)
+    libintercept_clone_hook_parent(pid);
 }
 
 static __attribute__((constructor)) void
 _libintercept_syscall_hook_constructor(void) {
   intercept_hook_point = NULL; // guard?
 
-  /* Initialize callbacks for clone()-related functions. */
-
-  intercept_hook_point_clone_child = _libintercept_syscall_hook_child;
-  intercept_hook_point_clone_parent = NULL; // N/A
+  log_info("Enabling syscall & signal interception...");
 
   /* Start signal interception. */
 
   _libintercept_signal_hook_init();
 
-  log_info("Enabling syscall & signal interception...");
-
   /* Start system call interception. */
 
   intercept_hook_point = _libintercept_syscall_hook;
+
+  intercept_hook_point_clone_child = _libintercept_syscall_hook_child;
+  intercept_hook_point_clone_parent = _libintercept_syscall_hook_parent;
 }
