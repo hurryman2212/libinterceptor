@@ -23,7 +23,8 @@ set(CMAKE_CXX_STANDARD 11)
 set(C_FLAGS
     "-Wall \
   -Wextra \
-  -Werror")
+  -Werror \
+  -D_GNU_SOURCE")
 set(CXX_FLAGS ${C_FLAGS})
 set(CMAKE_C_FLAGS ${C_FLAGS})
 set(CMAKE_CXX_FLAGS ${CXX_FLAGS})
@@ -38,10 +39,9 @@ add_link_options($<$<COMPILE_LANGUAGE:CXX>:-rdynamic>)
 set(C_FLAGS_RELEASE
     "-DNDEBUG \
   -march=native \
-  -O2 \
-  -ftree-vectorize")
+  -O2")
 set(CXX_FLAGS_RELEASE ${C_FLAGS_RELEASE})
-set(C_FLAGS_DEBUG "-Og")
+set(C_FLAGS_DEBUG "-O0")
 set(CXX_FLAGS_DEBUG ${C_FLAGS_DEBUG})
 
 # Handle build type
@@ -61,9 +61,9 @@ set(C_FLAGS_LTO -flto)
 set(CXX_FLAGS_LTO ${C_FLAGS_LTO})
 
 # Set target debug option for gdb if the compiler is gcc, or lldb if clang
-set(LLDB_FLAGS_DBG -glldb)
+set(LLDB_FLAGS_DBG -glldb -shared-libasan)
 set(GDB_FLAGS_DBG -ggdb3)
-set(GENERIC_FLAGS_DBG -g3)
+set(GENERIC_FLAGS_DBG -g3 -fsanitize=address,undefined)
 if(CMAKE_C_COMPILER STREQUAL "clang")
   set(C_FLAGS_DBG ${LLDB_FLAGS_DBG})
 elseif(CMAKE_C_COMPILER STREQUAL "gcc")

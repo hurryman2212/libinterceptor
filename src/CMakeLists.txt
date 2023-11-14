@@ -4,7 +4,7 @@ project(libintercept)
 # Find path of external library to link
 find_library(item_libsyscall_intercept syscall_intercept)
 find_library(item_libx86linuxextra x86linuxextra)
-set(libraries ${item_libaudit} ${item_libsyscall_intercept} ${item_libx86linuxextra})
+set(libraries ${item_libsyscall_intercept} ${item_libx86linuxextra})
 
 # Enlist source from current directory recursively
 file(GLOB_RECURSE sources *.c *.cc *.cpp *.cxx)
@@ -48,61 +48,37 @@ target_compile_options(${PROJECT_NAME}
                        PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_NORM}>)
 target_compile_options(${PROJECT_NAME}
                        PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_NORM}>)
-target_link_options(${PROJECT_NAME} PUBLIC
-                    $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_NORM}>)
-target_link_options(${PROJECT_NAME} PUBLIC
-                    $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_NORM}>)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   target_compile_options(${PROJECT_NAME}.lto
                          PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_LTO}>)
   target_compile_options(${PROJECT_NAME}.lto
                          PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_LTO}>)
+
+  # Set link option to strip out all debug & symbol information.
+  target_link_options(${PROJECT_NAME} PUBLIC
+                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_NORM} -Wl,-s>)
+  target_link_options(${PROJECT_NAME} PUBLIC
+                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_NORM} -Wl,-s>)
   target_link_options(${PROJECT_NAME}.lto PUBLIC
-                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_LTO}>)
+                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_LTO} -Wl,-s>)
   target_link_options(${PROJECT_NAME}.lto PUBLIC
-                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_LTO}>)
+                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_LTO} -Wl,-s>)
 else()
+
   target_compile_options(${PROJECT_NAME}.dbg
                          PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_DBG}>)
   target_compile_options(${PROJECT_NAME}.dbg
                          PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_DBG}>)
+
+  # Set link option to maintain all debug & symbol information.
+  target_link_options(${PROJECT_NAME} PUBLIC
+                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_NORM}>)
+  target_link_options(${PROJECT_NAME} PUBLIC
+                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_NORM}>)
   target_link_options(${PROJECT_NAME}.dbg PUBLIC
                       $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_DBG}>)
   target_link_options(${PROJECT_NAME}.dbg PUBLIC
                       $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_DBG}>)
-endif()
-
-# Set target-specific build options
-set(C_FLAGS_TARGET -mbmi -D_GNU_SOURCE)
-set(CXX_FLAGS_TARGET ${C_FLAGS_TARGET})
-
-# Add target-specific build options
-target_compile_options(${PROJECT_NAME}
-                       PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-target_compile_options(${PROJECT_NAME}
-                       PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
-target_link_options(${PROJECT_NAME} PUBLIC
-                    $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-target_link_options(${PROJECT_NAME} PUBLIC
-                    $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-  target_compile_options(${PROJECT_NAME}.lto
-                         PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-  target_compile_options(${PROJECT_NAME}.lto
-                         PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
-  target_link_options(${PROJECT_NAME}.lto PUBLIC
-                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-  target_link_options(${PROJECT_NAME}.lto PUBLIC
-                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
-else()
-  target_compile_options(${PROJECT_NAME}.dbg
-                         PUBLIC $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-  target_compile_options(${PROJECT_NAME}.dbg
-                         PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
-  target_link_options(${PROJECT_NAME}.dbg PUBLIC
-                      $<$<COMPILE_LANGUAGE:C>:${C_FLAGS_TARGET}>)
-  target_link_options(${PROJECT_NAME}.dbg PUBLIC
-                      $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS_TARGET}>)
 endif()
 
 # Set custom directory for "install"
