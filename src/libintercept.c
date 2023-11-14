@@ -1,5 +1,7 @@
 #include "libintercept.h"
 
+#include <stdarg.h>
+
 #include <sys/syscall.h>
 
 #include <libsyscall_intercept_hook_point.h>
@@ -75,9 +77,9 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
       memcpy(&_orig_sigaction[arg0], (const void *)arg1,
              sizeof(struct sigaction));
 
-      ((struct sigaction *_Nullable restrict)arg1)->sa_sigaction =
+      ((struct sigaction *restrict)arg1)->sa_sigaction =
           _libintercept_signal_wrapper;
-      ((struct sigaction *_Nullable restrict)arg1)->sa_flags |= SA_SIGINFO;
+      ((struct sigaction *restrict)arg1)->sa_flags |= SA_SIGINFO;
     }
 
     /* (for compatibility) Need to run sigaction() from GLIBC! (?) */
