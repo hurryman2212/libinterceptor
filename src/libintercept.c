@@ -59,16 +59,12 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
   int forward = 1;
 
-  struct sigaction osa;
-
-  switch (syscall_number) {
-  case SYS_rt_sigaction:
-    /* Disable syscall interception. */
-
-    intercept_hook_point = NULL;
-
+  if (syscall_number == SYS_rt_sigaction) {
     /* Do not allow user to actually change signal handler. */
 
+    /* Backup old sigaction saved. */
+
+    struct sigaction osa;
     memcpy(&osa, &_orig_sigaction[arg0], sizeof(struct sigaction));
 
     if (arg1) {
@@ -79,12 +75,13 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
       ((struct sigaction *restrict)arg1)->sa_sigaction =
           _libintercept_signal_wrapper;
-      ((struct sigaction *restrict)arg1)->sa_flags |= SA_SIGINFO;
+
+      // *((int *)&arg1 + 2) |= SA_SIGINFO
+      ((struct sigaction *restrict)arg1)->sa_flags |= SA_SIGINFO; // ?
     }
 
-    /* (for compatibility) Need to run sigaction() from GLIBC! (?) */
-    if ((*result = sigaction(arg0, (const struct sigaction *)arg1,
-                             (struct sigaction *)arg2)) == -1)
+    *result = raw_syscall(SYS_rt_sigaction, arg0, arg1, arg2, arg3);
+    if (*result == -1)
       *result = -errno;
 
     /* Give the expected sigaction to the user side (if requested). */
@@ -92,14 +89,8 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
     if (arg2)
       memcpy((void *)arg2, &osa, sizeof(struct sigaction));
 
-    /* Enable syscall interception again. */
-
-    intercept_hook_point = _libintercept_syscall_hook;
-
     forward = 0;
-    break;
-
-  default:
+  } else {
     /* Disable syscall interception. */
 
     intercept_hook_point = NULL;
@@ -153,8 +144,6 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
 
       /* Restore previous signal mask and sigaction. */
 
-      osa.sa_sigaction = _libintercept_signal_wrapper;
-      osa.sa_flags |= SA_SIGINFO;
       log_perror_assert(!sigaction(sig, &osa, NULL));
     } else {
       /* Enable syscall interception again. */
@@ -167,16 +156,32 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
 
       /* Check for SA_RESETHAND. */
 
-      if (*((int *)&_orig_sigaction[sig] + 2) & SA_RESETHAND) // temp.
+      // if (_orig_sigaction[sig].sa_flags & SA_RESETHAND) // not working
+      if (*((int *)&_orig_sigaction[sig] + 2) & SA_RESETHAND) // Why?
         /* Do NOT reset `sa_flags`-related! (standard) */
         _orig_sigaction[sig].sa_sigaction = NULL;
     }
   }
 
+  /* Enable syscall interception again (if required). */
+
   if (within_hook)
     intercept_hook_point = NULL;
   else
     intercept_hook_point = _libintercept_syscall_hook;
+}
+
+static void _libintercept_syscall_hook_child(void) {
+  /* Reinitialize TLS value. */
+
+  intercept_hook_point = _libintercept_syscall_hook;
+
+  if (libintercept_clone_hook_child)
+    libintercept_clone_hook_child();
+}
+static void _libintercept_syscall_hook_parent(long pid) {
+  if (libintercept_clone_hook_parent)
+    libintercept_clone_hook_parent(pid);
 }
 
 /* Constructor */
@@ -205,8 +210,6 @@ static void _libintercept_signal_hook_init(void) {
     }
 
   } else {
-    log_err("Syscall & signal interception is not allowed for this execution!");
-
     /* (for execve*()) Search if the current signal handlers are ours. */
 
     for (int i = 1; i < NSIG; ++i) {
@@ -220,34 +223,39 @@ static void _libintercept_signal_hook_init(void) {
     }
   }
 }
-
-static void _libintercept_syscall_hook_child(void) {
-  /* Reinitialize TLS value. */
-
-  intercept_hook_point = _libintercept_syscall_hook;
-
-  if (libintercept_clone_hook_child)
-    libintercept_clone_hook_child();
-}
-static void _libintercept_syscall_hook_parent(long pid) {
-  if (libintercept_clone_hook_parent)
-    libintercept_clone_hook_parent(pid);
-}
-
 static __attribute__((constructor)) void
 _libintercept_syscall_hook_constructor(void) {
-  intercept_hook_point = NULL; // guard?
+  /* Disable all previous interception. */
 
-  log_info("Enabling syscall & signal interception...");
+  intercept_hook_point = NULL;
+  intercept_hook_point_clone_child = NULL;
+  intercept_hook_point_clone_parent = NULL;
 
-  /* Start signal interception. */
+#ifndef NDEBUG
+  fprintf(stderr,
+          "libintercept 0.1.0 (Debug) - Jihong Min (hurryman2212@gmail.com)\n");
+#else
+  fprintf(
+      stderr,
+      "libintercept 0.1.0 (Release) - Jihong Min (hurryman2212@gmail.com)\n");
+#endif
+
+  /* Initialize signal interception. */
 
   _libintercept_signal_hook_init();
 
   /* Start system call interception. */
 
   intercept_hook_point = _libintercept_syscall_hook;
-
   intercept_hook_point_clone_child = _libintercept_syscall_hook_child;
   intercept_hook_point_clone_parent = _libintercept_syscall_hook_parent;
+
+  if (syscall_hook_in_process_allowed())
+    log_warn("Syscall & signal interception is now active!");
+  else {
+    log_err("Syscall & signal interception is not allowed for this execution!");
+    const char *env = getenv("INTERCEPT_HOOK_CMDLINE_FILTER");
+    if (env)
+      log_err("env: INTERCEPT_HOOK_CMDLINE_FILTER=%s", env);
+  }
 }
