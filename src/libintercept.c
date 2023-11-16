@@ -1,7 +1,5 @@
 #include "libintercept.h"
 
-#include <stdarg.h>
-
 #include <sys/syscall.h>
 
 #include <libsyscall_intercept_hook_point.h>
@@ -171,7 +169,12 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
     intercept_hook_point = _libintercept_syscall_hook;
 }
 
+_Thread_local pid_t self_tid = 0;
 static void _libintercept_syscall_hook_child(void) {
+  /* Save self Thread ID. */
+
+  self_tid = gettid();
+
   /* Reinitialize TLS value. */
 
   intercept_hook_point = _libintercept_syscall_hook;
@@ -231,14 +234,12 @@ _libintercept_syscall_hook_constructor(void) {
   intercept_hook_point_clone_child = NULL;
   intercept_hook_point_clone_parent = NULL;
 
-#ifndef NDEBUG
-  fprintf(stderr,
-          "libintercept 0.1.0 (Debug) - Jihong Min (hurryman2212@gmail.com)\n");
-#else
-  fprintf(
-      stderr,
-      "libintercept 0.1.0 (Release) - Jihong Min (hurryman2212@gmail.com)\n");
-#endif
+  /* Save initial self Thread ID. */
+
+  self_tid = gettid();
+
+  log_init(NULL, 0, -1, 1, 0);
+  ENABLE_LOG();
 
   /* Initialize signal interception. */
 
@@ -249,13 +250,4 @@ _libintercept_syscall_hook_constructor(void) {
   intercept_hook_point = _libintercept_syscall_hook;
   intercept_hook_point_clone_child = _libintercept_syscall_hook_child;
   intercept_hook_point_clone_parent = _libintercept_syscall_hook_parent;
-
-  if (syscall_hook_in_process_allowed())
-    log_warn("Syscall & signal interception is now active!");
-  else {
-    log_err("Syscall & signal interception is not allowed for this execution!");
-    const char *env = getenv("INTERCEPT_HOOK_CMDLINE_FILTER");
-    if (env)
-      log_err("env: INTERCEPT_HOOK_CMDLINE_FILTER=%s", env);
-  }
 }

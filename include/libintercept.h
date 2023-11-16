@@ -24,6 +24,13 @@ extern int (*libintercept_syscall_hook)(long syscall_number, long arg0,
                                         long arg1, long arg2, long arg3,
                                         long arg4, long arg5, long *ret);
 
+/* Self Thread ID set upon clone() in child thread */
+#ifdef __cplusplus
+extern thread_local pid_t self_tid;
+#else
+extern _Thread_local pid_t self_tid;
+#endif
+
 extern void (*libintercept_clone_hook_child)(void);
 extern void (*libintercept_clone_hook_parent)(long pid);
 
