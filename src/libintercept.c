@@ -13,8 +13,8 @@ int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
                                  long *result) = NULL;
 
 void (*libintercept_rt_sigaction_hook)(int *signum,
-                                       const struct sigaction *restrict *act,
-                                       struct sigaction *restrict *oldact,
+                                       const struct sigaction *__restrict *act,
+                                       struct sigaction *__restrict *oldact,
                                        size_t *sigsetsize) = NULL;
 
 int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context) = NULL;

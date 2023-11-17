@@ -25,8 +25,8 @@ extern int (*libintercept_syscall_hook)(long syscall_number, long arg0,
                                         long arg4, long arg5, long *ret);
 
 extern void (*libintercept_rt_sigaction_hook)(
-    int *signum, const struct sigaction *restrict *act,
-    struct sigaction *restrict *oldact, size_t *sigsetsize);
+    int *signum, const struct sigaction *__restrict *act,
+    struct sigaction *__restrict *oldact, size_t *sigsetsize);
 
 extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
 
