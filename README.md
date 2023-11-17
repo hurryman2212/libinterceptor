@@ -22,8 +22,6 @@ Return non-zero value to call the current original signal handler, otherwise 0.
 ## Example
 Build your library to be preloaded via `LD_PRELOAD` and set the hooking function pointer values.
 ```c
-#include <string.h>
-
 #include <sys/syscall.h>
 
 #include <libaudit.h>
@@ -32,8 +30,8 @@ Build your library to be preloaded via `LD_PRELOAD` and set the hooking function
 #include <x86linux/helper.h>
 
 int _signal_hook(__attribute__((unused)) int sig,
-                 __attribute__((unused)) siginfo_t *info,
-                 __attribute__((unused)) void *context) {
+                 __attribute__((unused)) siginfo_t **info,
+                 __attribute__((unused)) void **context) {
   int forward = 1;
 
   log_info("SIG%s", sigabbrev_np(sig));
@@ -53,9 +51,9 @@ static __attribute__((hot, flatten)) int _syscall_hook(
 
   if ((syscall_number == SYS_vfork) || (syscall_number == SYS_rt_sigreturn) ||
       (syscall_number == SYS_clone) || (syscall_number == SYS_clone3))
-    log_warn("%s(0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) -> Forwarding...",
-             audit_syscall_to_name(syscall_number, MACH_86_64), arg0, arg1,
-             arg2, arg3, arg4, arg5);
+    log_warning("%s(0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx) -> Forwarding...",
+                audit_syscall_to_name(syscall_number, MACH_86_64), arg0, arg1,
+                arg2, arg3, arg4, arg5);
   else {
     *ret = raw_syscall(syscall_number, arg0, arg1, arg2, arg3, arg4, arg5);
     errno_save = errno;

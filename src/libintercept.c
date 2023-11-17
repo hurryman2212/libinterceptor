@@ -1,5 +1,4 @@
-#include "libintercept.h"
-
+#include <sys/signal.h>
 #include <sys/syscall.h>
 
 #include <libsyscall_intercept_hook_point.h>
@@ -17,7 +16,8 @@ void (*libintercept_rt_sigaction_hook)(int *signum,
                                        struct sigaction *__restrict *oldact,
                                        size_t *sigsetsize) = NULL;
 
-int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context) = NULL;
+int (*libintercept_signal_hook)(int sig, siginfo_t **info,
+                                void **context) = NULL;
 
 void (*libintercept_clone_hook_child)(void) = NULL;
 void (*libintercept_clone_hook_parent)(long pid) = NULL;
@@ -66,14 +66,23 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
 
   int forward = 1;
 
-  if (syscall_number == SYS_rt_sigaction) {
+  if (unlikely(syscall_number == SYS_rt_sigaction)) {
     /* Do not allow user to actually change signal handler. */
 
     /* Let user to modify original values passed here first. */
 
-    if (libintercept_rt_sigaction_hook)
+    if (libintercept_rt_sigaction_hook) {
+      /* Disable syscall interception. */
+
+      intercept_hook_point = NULL;
+
       libintercept_rt_sigaction_hook(address_cast(&arg0), address_cast(&arg1),
                                      address_cast(&arg2), address_cast(&arg3));
+
+      /* Enable syscall interception again. */
+
+      intercept_hook_point = _libintercept_syscall_hook;
+    }
 
     /* Backup old sigaction saved. */
 
@@ -136,7 +145,7 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
   intercept_hook_point = NULL;
 
   if (libintercept_signal_hook)
-    forward = libintercept_signal_hook(sig, info, context);
+    forward = libintercept_signal_hook(sig, &info, &context);
 
   if (forward) {
     if (!orig_sigaction[sig].sa_sigaction) {
@@ -239,7 +248,7 @@ static void _libintercept_signal_hook_init(void) {
     }
   }
 }
-static __attribute__((constructor)) void
+static __attribute__((constructor(101))) void
 _libintercept_syscall_hook_constructor(void) {
   /* Disable all previous interception. */
 

@@ -28,7 +28,8 @@ extern void (*libintercept_rt_sigaction_hook)(
     int *signum, const struct sigaction *__restrict *act,
     struct sigaction *__restrict *oldact, size_t *sigsetsize);
 
-extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
+extern int (*libintercept_signal_hook)(int sig, siginfo_t **info,
+                                       void **context);
 
 extern void (*libintercept_clone_hook_child)(void);
 extern void (*libintercept_clone_hook_parent)(long pid);
