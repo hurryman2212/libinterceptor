@@ -24,17 +24,21 @@ extern int (*libintercept_syscall_hook)(long syscall_number, long arg0,
                                         long arg1, long arg2, long arg3,
                                         long arg4, long arg5, long *ret);
 
+extern void (*libintercept_rt_sigaction_hook)(
+    int *signum, const struct sigaction *restrict *act,
+    struct sigaction *restrict *oldact, size_t *sigsetsize);
+
+extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
+
+extern void (*libintercept_clone_hook_child)(void);
+extern void (*libintercept_clone_hook_parent)(long pid);
+
 /* Self Thread ID set upon clone() in child thread */
 #ifdef __cplusplus
 extern thread_local pid_t self_tid;
 #else
 extern _Thread_local pid_t self_tid;
 #endif
-
-extern void (*libintercept_clone_hook_child)(void);
-extern void (*libintercept_clone_hook_parent)(long pid);
-
-extern int (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context);
 
 #ifdef __cplusplus
 }
