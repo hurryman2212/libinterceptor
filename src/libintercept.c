@@ -1,28 +1,12 @@
-#include <sys/signal.h>
+#include "libintercept.h"
+
 #include <sys/syscall.h>
+
+#include <pthread.h>
 
 #include <libsyscall_intercept_hook_point.h>
 
 #include <x86linux/helper.h>
-
-/* Variables for signal & system call interception */
-
-int (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
-                                 long arg2, long arg3, long arg4, long arg5,
-                                 long *result) = NULL;
-
-void (*libintercept_rt_sigaction_hook)(int *signum,
-                                       const struct sigaction *__restrict *act,
-                                       struct sigaction *__restrict *oldact,
-                                       size_t *sigsetsize) = NULL;
-
-int (*libintercept_signal_hook)(int sig, siginfo_t **info,
-                                void **context) = NULL;
-
-void (*libintercept_clone_hook_child)(void) = NULL;
-void (*libintercept_clone_hook_parent)(long pid) = NULL;
-
-_Thread_local pid_t self_tid = 0;
 
 /* Wrapper functions */
 
@@ -46,13 +30,69 @@ long raw_syscall(long syscall_number, ...) {
              : _ret;
 }
 
-/* Static variables & functions*/
+void libintercept_start_thread_group_monitor(void *arg) {
+  if (libintercept_thread_group_monitor)
+    log_perror_assert(!pthread_create(&libintercept_thread_group_monitor_ident,
+                                      &libintercept_thread_group_monitor_attr,
+                                      libintercept_thread_group_monitor, arg));
+}
 
+/* Variables for signal & system call interception */
+
+long (*libintercept_syscall_hook)(long syscall_number, long arg0, long arg1,
+                                  long arg2, long arg3, long arg4, long arg5,
+                                  int *forward) = NULL;
+
+void (*libintercept_signal_hook)(int sig, siginfo_t *info, void *context,
+                                 int *forward,
+                                 struct sigaction *orig_sigaction) = NULL;
+
+_Thread_local pid_t self_tid = 0;
+void *(*libintercept_clone_hook_child)(pid_t parent_tgid) = NULL;
+void (*libintercept_clone_hook_parent)(pid_t child_tid) = NULL;
+
+pid_t self_tgid = 0;
+size_t nr_local_thread = 1;
+pthread_attr_t libintercept_thread_group_monitor_attr = {0};
+pthread_t libintercept_thread_group_monitor_ident = 0;
+void *(*libintercept_thread_group_monitor)(void *arg) = NULL;
+
+/* Static variables & functions */
+
+/* (standard) All local threads share the same sigaction. */
 static struct sigaction orig_sigaction[NSIG] = {0};
-
 static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
                                          void *context);
-static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
+static int libintercept_rt_sigaction(int signum,
+                                     struct sigaction *__restrict act,
+                                     struct sigaction *__restrict oldact,
+                                     size_t sigsetsize) {
+  int ret;
+
+  struct sigaction osa;
+  /* Backup old sigaction saved. */
+  memcpy(&osa, &orig_sigaction[signum], sizeof(struct sigaction));
+  if (act) {
+    /* Save requested `struct sigaction` first, then alter it. */
+    memcpy(&orig_sigaction[signum], act, sizeof(struct sigaction));
+
+    act->sa_sigaction = _libintercept_signal_wrapper;
+    // *((int *)&sa + 2) |= SA_SIGINFO // also working
+    act->sa_flags |= SA_SIGINFO; // ?
+  }
+
+  // ret = sigaction(signum, act, oldact); // not working
+  ret = raw_syscall(SYS_rt_sigaction, signum, act, oldact, sigsetsize);
+  if (act)
+    memcpy(act, &orig_sigaction[signum], sizeof(struct sigaction));
+
+  /* Give the expected sigaction to the user side (if requested). */
+  if (oldact)
+    memcpy(oldact, &osa, sizeof(struct sigaction));
+
+  return ret;
+}
+static __attribute__((hot, flatten)) int _libintercept_syscall_wrapper(
     __attribute__((unused)) long syscall_number,
     __attribute__((unused)) long arg0, __attribute__((unused)) long arg1,
     __attribute__((unused)) long arg2, __attribute__((unused)) long arg3,
@@ -61,91 +101,108 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_hook(
   /**
    * Intercept syscall instruction and save return value to `*result`.
    *
-   * Return 0 to omit real syscall instruction to be executed.
+   * Return 0 to prohibit the original syscall from forwarding to the kernel.
    */
 
-  int forward = 1;
+  int forward = 0;
 
-  if (unlikely(syscall_number == SYS_rt_sigaction)) {
-    /* Do not allow user to actually change signal handler. */
+  /* Disable syscall interception. */
+  intercept_hook_point = NULL;
 
-    /* Let user to modify original values passed here first. */
+  switch (syscall_number) {
+  case SYS_vfork:
+  case SYS_rt_sigreturn:
+  case SYS_clone:
+  case SYS_clone3:
+    /* Inhibit above system calls from interception. */
+    forward = 1;
+    break;
 
-    if (libintercept_rt_sigaction_hook) {
-      /* Disable syscall interception. */
-
-      intercept_hook_point = NULL;
-
-      libintercept_rt_sigaction_hook(address_cast(&arg0), address_cast(&arg1),
-                                     address_cast(&arg2), address_cast(&arg3));
-
-      /* Enable syscall interception again. */
-
-      intercept_hook_point = _libintercept_syscall_hook;
-    }
-
-    /* Backup old sigaction saved. */
-
-    struct sigaction osa;
-    memcpy(&osa, &orig_sigaction[arg0], sizeof(struct sigaction));
-    struct sigaction *sa = address_cast(arg1);
-
-    if (arg1) {
-      /* Save requested `struct sigaction` first, then alter it. */
-
-      memcpy(&orig_sigaction[arg0], sa, sizeof(struct sigaction));
-
-      sa->sa_sigaction = _libintercept_signal_wrapper;
-
-      // *((int *)sa + 2) |= SA_SIGINFO // also working
-      sa->sa_flags |= SA_SIGINFO; // ?
-    }
-
-    *result = raw_syscall(SYS_rt_sigaction, arg0, arg1, arg2, arg3); // ?
+  case SYS_rt_sigaction:
+    /* Do not allow user to actually change signal handler! */
+    *result = libintercept_rt_sigaction(arg0, address_cast(arg1),
+                                        address_cast(arg2), arg3);
     if (*result == -1)
       *result = -errno;
+    break;
 
-    /* Give the expected sigaction to the user side (if requested). */
-
-    if (arg2)
-      memcpy(address_cast(arg2), &osa, sizeof(struct sigaction));
-
-    forward = 0;
-  } else {
-    /* Disable syscall interception. */
-
-    intercept_hook_point = NULL;
-
-    /* Forward to user function first (if available). */
-
-    if (libintercept_syscall_hook) {
-      forward = libintercept_syscall_hook(syscall_number, arg0, arg1, arg2,
-                                          arg3, arg4, arg5, result);
-
-      /* Save `errno` to `*result` upon error. */
-
-      if (!forward && (*result == -1))
-        *result = -errno;
+  case SYS_exit:
+    if (__sync_sub_and_fetch(&nr_local_thread, 1)) {
+      forward = 1;
+      break;
     }
+    /* This is the last local thread (except the monitor). */
+  case SYS_exit_group:
+    nr_local_thread = 0;
+    /* Kill the thread group monitor for this group (if there is). */
+    if (libintercept_thread_group_monitor_ident)
+      pthread_kill(libintercept_thread_group_monitor_ident, SIGTERM);
+    forward = 1;
+    break;
 
-    /* Enable syscall interception again. */
-
-    intercept_hook_point = _libintercept_syscall_hook;
+  default:
+    /* Forward to user function first (if available). */
+    if (libintercept_syscall_hook) {
+      *result = libintercept_syscall_hook(syscall_number, arg0, arg1, arg2,
+                                          arg3, arg4, arg5, &forward);
+      /* Save `errno` to `*result` upon error. */
+      if (!forward && *result == -1)
+        *result = -errno;
+    } else
+      forward = 1;
   }
+
+  /* Enable syscall interception again. */
+  intercept_hook_point = _libintercept_syscall_wrapper;
 
   return forward;
 }
 
-static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
-                                         void *context) {
-  int within_hook = intercept_hook_point ? 0 : 1, forward = 1;
+static void _libintercept_clone_wrapper_child(void) {
+  pid_t parent_tgid = self_tgid;
+  self_tgid = getpid();
+  if (self_tgid == parent_tgid)
+    __sync_add_and_fetch(&nr_local_thread, 1);
+  else
+    nr_local_thread = 1;
 
+  self_tid = gettid();
+  void *ret = NULL;
+  if (libintercept_clone_hook_child)
+    ret = libintercept_clone_hook_child(parent_tgid);
+
+  /* Start a new instance of thread group monitor (if available). */
+  if ((self_tgid != parent_tgid) && libintercept_thread_group_monitor)
+    libintercept_start_thread_group_monitor(ret);
+
+  /* Reinitialize TLS variable for hooking. */
+  intercept_hook_point = _libintercept_syscall_wrapper;
+}
+static void _libintercept_clone_wrapper_parent(long pid) {
   /* Disable syscall interception. */
-
   intercept_hook_point = NULL;
 
+  if (libintercept_clone_hook_parent)
+    libintercept_clone_hook_parent(pid);
+
+  /* Enable syscall interception again. */
+  intercept_hook_point = _libintercept_syscall_wrapper;
+}
+
+static __attribute__((hot, flatten)) void
+_libintercept_signal_wrapper(int sig, siginfo_t *info, void *context) {
+  int within_hook = intercept_hook_point ? 0 : 1;
+
+  /* Disable syscall interception. */
+  intercept_hook_point = NULL;
+
+  int forward = 0;
+  /* Call user signal hook first (if available). */
   if (libintercept_signal_hook)
-    forward = libintercept_signal_hook(sig, &info, &context);
+    libintercept_signal_hook(sig, info, context, &forward,
+                             &orig_sigaction[sig]);
+  else
+    forward = 1;
 
   if (forward) {
     if (!orig_sigaction[sig].sa_sigaction) {
@@ -156,7 +213,6 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
       log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
 
       /* Unblock this signal first, raise it, then restore signal mask. */
-
       sigset_t tmp = {0}, old_sigset;
       log_perror_assert(!sigaddset(&tmp, sig));
       log_perror_assert(!sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
@@ -164,70 +220,45 @@ static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
       log_perror_assert(!sigprocmask(SIG_SETMASK, &old_sigset, NULL));
 
       /* Restore previous signal mask and sigaction. */
-
       log_perror_assert(!sigaction(sig, &osa, NULL));
     } else {
-      /* Enable syscall interception again. */
-
-      intercept_hook_point = _libintercept_syscall_hook;
+      /* Enable syscall interception before the original signal handler. */
+      intercept_hook_point = _libintercept_syscall_wrapper;
 
       /* Call the saved custom signal handler. */
-
       orig_sigaction[sig].sa_sigaction(sig, info, context);
 
       /* Check for SA_RESETHAND. */
 
       // if (orig_sigaction[sig].sa_flags & SA_RESETHAND) // not working
       if (*((int *)&orig_sigaction[sig] + 2) & SA_RESETHAND) // Why?
-        /* Do NOT reset `sa_flags`-related! (standard) */
+        /* Do NOT reset `sa_flags` here (since it is the standard behavior)! */
         orig_sigaction[sig].sa_sigaction = NULL;
     }
   }
 
   /* Enable syscall interception again (if required). */
-
   if (within_hook)
     intercept_hook_point = NULL;
   else
-    intercept_hook_point = _libintercept_syscall_hook;
-}
-
-static void _libintercept_syscall_hook_child(void) {
-  /* Save self Thread ID. */
-
-  self_tid = gettid();
-
-  /* Reinitialize TLS value. */
-
-  intercept_hook_point = _libintercept_syscall_hook;
-
-  if (libintercept_clone_hook_child)
-    libintercept_clone_hook_child();
-}
-static void _libintercept_syscall_hook_parent(long pid) {
-  if (libintercept_clone_hook_parent)
-    libintercept_clone_hook_parent(pid);
+    intercept_hook_point = _libintercept_syscall_wrapper;
 }
 
 /* Constructor */
 
-static void _libintercept_signal_hook_init(void) {
+static void _libintercept_signal_wrapper_init(void) {
   /* Allow signal interception only when syscall interception is allowed. */
-
   if (syscall_hook_in_process_allowed()) {
-
     /* Register our signal wrapper as handler for all signals. */
 
     for (int i = 1; i < NSIG; ++i) {
       if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
-        /* Backup the original sigaction. */
-
         struct sigaction osa;
+        /* Backup the original sigaction. */
         log_perror_assert(!sigaction(i, NULL, &osa));
         memcpy(&orig_sigaction[i], &osa, sizeof(struct sigaction));
 
         /* Update the sigaction. */
-
         osa.sa_sigaction = _libintercept_signal_wrapper;
         osa.sa_flags |= SA_SIGINFO;
         log_perror_assert(!sigaction(i, &osa, NULL));
@@ -248,28 +279,28 @@ static void _libintercept_signal_hook_init(void) {
     }
   }
 }
-static __attribute__((constructor(101))) void
-_libintercept_syscall_hook_constructor(void) {
+static __attribute__((constructor(101))) void _libintercept_constructor(void) {
   /* Disable all previous interception. */
-
   intercept_hook_point = NULL;
   intercept_hook_point_clone_child = NULL;
   intercept_hook_point_clone_parent = NULL;
 
-  /* Save initial self Thread ID. */
-
+  /* Save initial self Thread ID & Thread Group ID. */
   self_tid = gettid();
+  self_tgid = getpid();
 
   log_init(NULL, 0, -1, 1, 0);
-  log_enable();
+  log_enable(LOG_EMERG);
+
+  pthread_attr_init(&libintercept_thread_group_monitor_attr);
+  pthread_attr_setdetachstate(&libintercept_thread_group_monitor_attr,
+                              PTHREAD_CREATE_DETACHED);
 
   /* Initialize signal interception. */
-
-  _libintercept_signal_hook_init();
+  _libintercept_signal_wrapper_init();
 
   /* Start system call interception. */
-
-  intercept_hook_point = _libintercept_syscall_hook;
-  intercept_hook_point_clone_child = _libintercept_syscall_hook_child;
-  intercept_hook_point_clone_parent = _libintercept_syscall_hook_parent;
+  intercept_hook_point = _libintercept_syscall_wrapper;
+  intercept_hook_point_clone_child = _libintercept_clone_wrapper_child;
+  intercept_hook_point_clone_parent = _libintercept_clone_wrapper_parent;
 }

@@ -25,3 +25,6 @@
 !include/**.hh
 !include/**.hpp
 !include/**.hxx
+
+!.vscode
+!.vscode/c_cpp_properties.json
