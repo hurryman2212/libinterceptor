@@ -27,9 +27,7 @@ set(CMAKE_CXX_FLAGS ${CXX_FLAGS})
 
 # Set C/C++ linker option
 add_link_options($<$<COMPILE_LANGUAGE:C>:-fuse-ld=${CMAKE_LINKER}>)
-add_link_options($<$<COMPILE_LANGUAGE:C>:-rdynamic>)
 add_link_options($<$<COMPILE_LANGUAGE:CXX>:-fuse-ld=${CMAKE_LINKER}>)
-add_link_options($<$<COMPILE_LANGUAGE:CXX>:-rdynamic>)
 
 # Override `Debug` and `Release` C/C++ build options
 set(C_FLAGS_RELEASE "-DNDEBUG -march=native -O2")

@@ -32,7 +32,7 @@ long raw_syscall(long syscall_number, ...) {
              : _ret;
 }
 
-void libintercept_start_thread_group_monitor(void *arg) {
+void libintercept_attach_thread_group_monitor(void *arg) {
   if (libintercept_thread_group_monitor)
     log_abort_if_errno(pthread_create(&libintercept_thread_group_monitor_ident,
                                       &libintercept_thread_group_monitor_attr,
@@ -55,13 +55,19 @@ void (*libintercept_clone_hook_parent)(pid_t child_tid) = NULL;
 
 pid_t self_tgid = 0;
 size_t nr_local_thread = 1;
+
 pthread_attr_t libintercept_thread_group_monitor_attr = {0};
-pthread_t libintercept_thread_group_monitor_ident = 0;
 void *(*libintercept_thread_group_monitor)(void *arg) = NULL;
+
+pthread_t libintercept_thread_group_monitor_ident = 0;
 
 /* Static variables & functions */
 
-/* (standard) All local threads share the same sigaction. */
+/**
+ * (standard) All local threads share the same sigaction.
+ *
+ * (See `man 2 clone` about CLONE_SIGHAND, CLONE_VM, and CLONE_THREAD.)
+ */
 static struct sigaction orig_sigaction[NSIG] = {0};
 static void _libintercept_signal_wrapper(int sig, siginfo_t *info,
                                          void *context);
@@ -144,14 +150,15 @@ static __attribute__((hot, flatten)) int _libintercept_syscall_wrapper(
 
   default:
     /* Forward to user function first (if available). */
-    if (libintercept_syscall_hook) {
+    if (unlikely(!libintercept_syscall_hook))
+      forward = 1;
+    else {
       *result = libintercept_syscall_hook(syscall_number, arg0, arg1, arg2,
                                           arg3, arg4, arg5, &forward);
       /* Save `errno` to `*result` upon error. */
       if (!forward && *result == -1)
         *result = -errno;
-    } else
-      forward = 1;
+    }
   }
 
   /* Enable syscall interception again. */
@@ -175,7 +182,7 @@ static void _libintercept_clone_wrapper_child(void) {
 
   /* Start a new instance of thread group monitor (if available). */
   if ((self_tgid != parent_tgid) && libintercept_thread_group_monitor)
-    libintercept_start_thread_group_monitor(ret);
+    libintercept_attach_thread_group_monitor(ret);
 
   /* Reinitialize TLS variable for hooking. */
   intercept_hook_point = _libintercept_syscall_wrapper;
@@ -200,29 +207,29 @@ _libintercept_signal_wrapper(int sig, siginfo_t *info, void *context) {
 
   int forward = 0;
   /* Call user signal hook first (if available). */
-  if (libintercept_signal_hook)
+  if (unlikely(!libintercept_signal_hook))
+    forward = 1;
+  else
     libintercept_signal_hook(sig, info, context, &forward,
                              &orig_sigaction[sig]);
-  else
-    forward = 1;
 
   if (forward) {
-    if (!orig_sigaction[sig].sa_sigaction) {
+    if (unlikely(!orig_sigaction[sig].sa_sigaction)) {
       /* User did not set signal handler; Use default signal handler for now. */
 
       struct sigaction osa;
       log_abort_on_error(sigaction(sig, NULL, &osa));
       log_abort_on_error(signal(sig, SIG_DFL));
 
-      /* Unblock this signal first, raise it, then restore signal mask. */
+      /* Unblock this signal first, then raise it. */
       sigset_t tmp = {0}, old_sigset;
       log_abort_on_error(sigaddset(&tmp, sig));
       log_abort_on_error(sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
       log_abort_on_error(raise(sig));
-      log_abort_on_error(sigprocmask(SIG_SETMASK, &old_sigset, NULL));
 
       /* Restore previous signal mask and sigaction. */
-      log_abort_on_error(sigaction(sig, &osa, NULL));
+      log_abort_on_error(sigprocmask(SIG_SETMASK, &old_sigset, NULL));
+      log_abort_on_error(sigaction(sig, &osa, NULL)); // ?
     } else {
       /* Enable syscall interception before the original signal handler. */
       intercept_hook_point = _libintercept_syscall_wrapper;
@@ -234,7 +241,7 @@ _libintercept_signal_wrapper(int sig, siginfo_t *info, void *context) {
 
       // if (orig_sigaction[sig].sa_flags & SA_RESETHAND) // not working
       if (*((int *)&orig_sigaction[sig] + 2) & SA_RESETHAND) // Why?
-        /* Do NOT reset `sa_flags` here (since it is the standard behavior)! */
+        /* Do NOT reset `sa_flags` here! (Since it is confirmed behavior.) */
         orig_sigaction[sig].sa_sigaction = NULL;
     }
   }
@@ -252,32 +259,24 @@ static void _libintercept_signal_wrapper_init(void) {
   /* Allow signal interception only when syscall interception is allowed. */
   if (syscall_hook_in_process_allowed()) {
     /* Register our signal wrapper as handler for all signals. */
-
     for (int i = 1; i < NSIG; ++i) {
-      if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
-        struct sigaction osa;
-        /* Backup the original sigaction. */
-        log_abort_on_error(sigaction(i, NULL, &osa));
-        memcpy(&orig_sigaction[i], &osa, sizeof(struct sigaction));
+      if (unlikely((i > SIGSYS && i < SIGRTMIN) || i == SIGKILL ||
+                   i == SIGSTOP))
+        continue;
 
-        /* Update the sigaction. */
-        osa.sa_sigaction = _libintercept_signal_wrapper;
-        osa.sa_flags |= SA_SIGINFO;
-        log_abort_on_error(sigaction(i, &osa, NULL));
-      }
-    }
+      struct sigaction osa;
+      log_abort_on_error(sigaction(i, NULL, &osa));
+      if (unlikely(i == SIGRTMAX && osa.sa_sigaction))
+        /* (workaround for valgrind) Omit SIGRT32 interception. */
+        continue;
 
-  } else {
-    /* (for execve*()) Search if the current signal handlers are ours. */
+      /* Backup the original sigaction. */
+      memcpy(&orig_sigaction[i], &osa, sizeof(struct sigaction));
 
-    for (int i = 1; i < NSIG; ++i) {
-      if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
-        struct sigaction osa;
-        log_abort_on_error(sigaction(i, NULL, &osa));
-        if (osa.sa_sigaction == _libintercept_signal_wrapper)
-          /* Restore to the default singal handler. */
-          log_abort_on_error(signal(i, SIG_DFL));
-      }
+      /* Update the sigaction. */
+      osa.sa_sigaction = _libintercept_signal_wrapper;
+      osa.sa_flags |= SA_SIGINFO;
+      log_abort_on_error(sigaction(i, &osa, NULL));
     }
   }
 }
@@ -294,9 +293,13 @@ static __attribute__((constructor(101))) void _libintercept_constructor(void) {
   log_init(NULL, 0, -1, 1, 0);
   log_enable(LOG_EMERG);
 
+  /* Set default attribute of thread group monitor. */
   pthread_attr_init(&libintercept_thread_group_monitor_attr);
   pthread_attr_setdetachstate(&libintercept_thread_group_monitor_attr,
                               PTHREAD_CREATE_DETACHED);
+
+  /* Early attachment of thread group monitor if (somehow) available. */
+  libintercept_attach_thread_group_monitor(NULL);
 
   /* Initialize signal interception. */
   _libintercept_signal_wrapper_init();

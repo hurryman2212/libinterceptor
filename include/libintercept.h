@@ -12,7 +12,7 @@ long raw_syscall(long syscall_number, ...);
 /**
  * GLIBC syscall()-like hooking function
  *
- * The input parameters are for raw_syscall() (do not use GLIBC's syscall()!).
+ * The input parameters are for raw_syscall(). (Do not use GLIBC's syscall()!)
  *
  * Save 0 to `*forward` to bypass the original syscall forwarded to the kernel.
  *
@@ -47,11 +47,14 @@ extern void (*libintercept_clone_hook_parent)(pid_t child_tid);
 extern pid_t self_tgid;
 /* Number of thread(s) in the thread group except the thread group monitor. */
 extern size_t nr_local_thread;
+
 /* 0 == No running thread group monitor yet. */
 extern pthread_attr_t libintercept_thread_group_monitor_attr;
-extern pthread_t libintercept_thread_group_monitor_ident;
 extern void *(*libintercept_thread_group_monitor)(void *arg);
-void libintercept_start_thread_group_monitor(void *arg);
+
+extern pthread_t libintercept_thread_group_monitor_ident;
+
+void libintercept_attach_thread_group_monitor(void *arg);
 
 #ifdef __cplusplus
 }
