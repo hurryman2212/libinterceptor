@@ -1,6 +1,6 @@
 #pragma once
 
-#include <sys/signal.h>
+#include <signal.h>
 
 #ifdef __cplusplus
 extern "C" {

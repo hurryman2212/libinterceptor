@@ -1,6 +1,8 @@
 #include "libintercept.h"
 
-#include <sys/syscall.h>
+#include <errno.h>
+
+#include <syscall.h>
 
 #include <pthread.h>
 
@@ -32,7 +34,7 @@ long raw_syscall(long syscall_number, ...) {
 
 void libintercept_start_thread_group_monitor(void *arg) {
   if (libintercept_thread_group_monitor)
-    log_perror_assert(!pthread_create(&libintercept_thread_group_monitor_ident,
+    log_abort_if_errno(pthread_create(&libintercept_thread_group_monitor_ident,
                                       &libintercept_thread_group_monitor_attr,
                                       libintercept_thread_group_monitor, arg));
 }
@@ -209,18 +211,18 @@ _libintercept_signal_wrapper(int sig, siginfo_t *info, void *context) {
       /* User did not set signal handler; Use default signal handler for now. */
 
       struct sigaction osa;
-      log_perror_assert(!sigaction(sig, NULL, &osa));
-      log_perror_assert(signal(sig, SIG_DFL) != SIG_ERR);
+      log_abort_on_error(sigaction(sig, NULL, &osa));
+      log_abort_on_error(signal(sig, SIG_DFL));
 
       /* Unblock this signal first, raise it, then restore signal mask. */
       sigset_t tmp = {0}, old_sigset;
-      log_perror_assert(!sigaddset(&tmp, sig));
-      log_perror_assert(!sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
-      log_perror_assert(!raise(sig));
-      log_perror_assert(!sigprocmask(SIG_SETMASK, &old_sigset, NULL));
+      log_abort_on_error(sigaddset(&tmp, sig));
+      log_abort_on_error(sigprocmask(SIG_UNBLOCK, &tmp, &old_sigset));
+      log_abort_on_error(raise(sig));
+      log_abort_on_error(sigprocmask(SIG_SETMASK, &old_sigset, NULL));
 
       /* Restore previous signal mask and sigaction. */
-      log_perror_assert(!sigaction(sig, &osa, NULL));
+      log_abort_on_error(sigaction(sig, &osa, NULL));
     } else {
       /* Enable syscall interception before the original signal handler. */
       intercept_hook_point = _libintercept_syscall_wrapper;
@@ -255,13 +257,13 @@ static void _libintercept_signal_wrapper_init(void) {
       if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
         struct sigaction osa;
         /* Backup the original sigaction. */
-        log_perror_assert(!sigaction(i, NULL, &osa));
+        log_abort_on_error(sigaction(i, NULL, &osa));
         memcpy(&orig_sigaction[i], &osa, sizeof(struct sigaction));
 
         /* Update the sigaction. */
         osa.sa_sigaction = _libintercept_signal_wrapper;
         osa.sa_flags |= SA_SIGINFO;
-        log_perror_assert(!sigaction(i, &osa, NULL));
+        log_abort_on_error(sigaction(i, &osa, NULL));
       }
     }
 
@@ -271,10 +273,10 @@ static void _libintercept_signal_wrapper_init(void) {
     for (int i = 1; i < NSIG; ++i) {
       if (i != SIGKILL && i != SIGSTOP && (i <= SIGSYS || i >= SIGRTMIN)) {
         struct sigaction osa;
-        log_perror_assert(!sigaction(i, NULL, &osa));
+        log_abort_on_error(sigaction(i, NULL, &osa));
         if (osa.sa_sigaction == _libintercept_signal_wrapper)
           /* Restore to the default singal handler. */
-          log_perror_assert(signal(i, SIG_DFL) != SIG_ERR);
+          log_abort_on_error(signal(i, SIG_DFL));
       }
     }
   }
