@@ -1,5 +1,7 @@
 # Set root project name
-set(ROOT_PROJECT_NAME intercept)
+set(ROOT_PROJECT_NAME interceptor)
+
+# DO NOT EDIT THE BELOW!
 
 # Set minimum CMake version required
 cmake_minimum_required(VERSION 3.22.1)

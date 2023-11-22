@@ -1,6 +1,6 @@
 # !!! TARGET-SPECIFIC !!! #
 
-project(libintercept)
+project(lib${ROOT_PROJECT_NAME})
 
 # Enlist source from current directory recursively
 file(GLOB_RECURSE sources *.c *.cc *.cpp *.cxx)

@@ -6,8 +6,7 @@
                 "${workspaceFolder}/**"
             ],
             "defines": [
-                "_GNU_SOURCE",
-                "constructor(priority)=constructor"
+                "_GNU_SOURCE"
             ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "gnu11",
