@@ -6,24 +6,26 @@
 !LICENSE
 !*.md
 
+!PreLoad.cmake
 !CMakeLists.txt
 
 !src/
 !src/**/
-!src/**.c
-!src/**.cc
-!src/**.cpp
-!src/**.cxx
-!src/**.h
-!src/**.hh
-!src/**.hpp
-!src/**.hxx
+!src/**/*.c
+!src/**/*.cc
+!src/**/*.cpp
+!src/**/*.cxx
+!src/**/*.h
+!src/**/*.hh
+!src/**/*.hpp
+!src/**/*.hxx
 
 !include/
 !include/**/
-!include/**.h
-!include/**.hh
-!include/**.hpp
-!include/**.hxx
+!include/**/*.h
+!include/**/*.hh
+!include/**/*.hpp
+!include/**/*.hxx
 
 !.vscode/
+!.vscode/c_cpp_properties.json
