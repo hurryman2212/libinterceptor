@@ -1,4 +1,5 @@
 # libinterceptor
+
 Preloaded Library for Userspace Syscall Instruction, Signal and Thread Interception
 
 This is a library intended to be used as a 'preloaded' one via `LD_PRELOAD` and currently only supports x86-64 Linux as it depends on libsyscall_intercept.
@@ -7,10 +8,13 @@ You need [the special version of libsyscall_intercept](https://github.com/hurrym
 Additionally, you need [libx86linuxextra](https://github.com/hurryman2212/x86linuxextra) as a dependency.
 
 ## Usage
-Please refer to `libinterceptor.h`.
+
+Please refer to `include/libinterceptor.h`.
 
 ## Example
+
 Build your library to be preloaded via `LD_PRELOAD` and set the hooking function pointer values.
+
 ```c
 #include <errno.h>
 
